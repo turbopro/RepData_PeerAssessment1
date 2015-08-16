@@ -1,25 +1,275 @@
 ---
 title: "Reproducible Research: Peer Assessment 1"
+author: "Vern"
+date: "8/15/2015"
 output: 
   html_document:
     keep_md: true
 ---
 
-
 ## Loading and preprocessing the data
 
+### Loading
 
+Download the dataset here: [Activity monitoring data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip)  
+
+The dataset is an csv-formatted file, with data collected over the period Oct 01 thru Nov 31 2012, at 5-min intervals throughout each day.  
+
+There are 17568 observations with three variables:  
+
+1. **steps**: an integer vector with missing values stored as NAs
+
+2. **date**: a character vector of dates formated as, YYYY-mm-dd
+
+3. **interval**: a character vector of 5-min intervals over a 24 hour period  
+  
+
+We can download, unzip, and read in the file as per the R code below:   
+
+```{r, message=FALSE, eval=TRUE}
+# load libraries
+library(utils)      # for download.file()
+
+## assuming the name of the needed file in the dataset is "activity.csv"
+
+# create temp file, and download dataset to temp file (method='curl' for 'https' url)
+temp <- tempfile()
+URL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip"
+download.file(URL, temp, method = 'curl')
+
+# read in data; remove temp file
+activity_data <- read.csv(unz(temp, "activity.csv"))
+unlink(temp)
+
+```
+
+[`tempfile`](http://www.rdocumentation.org/packages/base/functions/tempfile),
+[`download.file`](http://www.rdocumentation.org/packages/utils/functions/download.file), [`read.csv`](http://www.rdocumentation.org/packages/utils/functions/read.table), 
+[`unlink`](http://www.rdocumentation.org/packages/base/functions/unlink)  
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
+
+### Data Preprocessing
+
+Two variables will be added to the dataset:  
+
+1. **date_times**, a datetime vector of the dates and times combined  
+
+2. **interval_seq**: a times vector of the 5-minute intervals for a 24-hour period
+
+```{r, echo=TRUE, message=FALSE }
+# load libraries
+library(dplyr)      ## manipulate the data
+library(lubridate)  ## for ymd_hm function
+library(chron)      ## for times class 
+
+# convert dataframe to tbl_df (dplyr)
+activity_data <- tbl_df(activity_data)
+
+# add variable 'date_times' (POSIXct class) to dataset
+activity_data <- activity_data %>%
+     mutate(date_times = seq(from = ymd_hm("2012.10.1 0:0", tz = "UTC"), to = ymd_hm("2012.11.30 23:55"), by = 300))
+
+# create char vector of sequence of 5-minute intervals over a 24-hour period
+interval_seq <- format(seq(c(ISOdatetime(2012,10,1,0,0,0)), by = 300, length.out = 288), "%H:%M:%S")
+
+# add 'interval_seq' to dataset; convert from char to times vector
+activity_data$interval_seq <-interval_seq
+activity_data <- activity_data %>%
+     mutate(interval_seq = chron(times. = interval_seq))
+
+```
+
+[`dplyr`](http://www.rdocumentation.org/packages/dplyr),
+[`lubridate`](http://www.rdocumentation.org/packages/lubridate/functions/lubridate), [`chron`](http://www.rdocumentation.org/packages/chron/functions/chron)  
+
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
 
 ## What is mean total number of steps taken per day?
 
+We calculate the summary statistics by grouping by date.   
 
+We use [`ggvis`](http://www.rdocumentation.org/packages/ggvis/functions/ggvis) to plot the histogram:  
+
+```{r, echo=TRUE, message=FALSE}
+#load libraries
+library(ggvis)
+
+# daily totals of steps taken per day
+daily_totals <- activity_data %>%
+     group_by(d = cut.POSIXt(date_times, breaks = "days")) %>%
+     summarise(daily_sum = sum(steps, na.rm = TRUE))
+
+# daily mean and daily median
+daily_mean <- round(mean(daily_totals$daily_sum, na.rm = TRUE))
+daily_median <- median(daily_totals$daily_sum, na.rm = TRUE)
+
+# Histogram of total number of steps taken daily
+daily_totals %>%
+     ggvis(~daily_sum) %>%
+     layer_histograms(width=2000, fill := "blue") %>%
+     add_axis("x", title = "Number of Steps") %>%
+     add_axis("y", title = "Frequency")
+
+```
+
+
+The mean of the total number of steps taken per day: **``r daily_mean``**
+
+The median of the total number of steps taken per day: **``r daily_median``**  
+
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
 
 ## What is the average daily activity pattern?
 
+This time we summarise by the intervals to calculate the daily activity patterns:
 
+```{r, echo=TRUE}
+
+# time series plot of the 5-minute interval vs the average number of 
+# steps taken, averaged across all days (y-axis)
+interval_means <- activity_data %>%
+     group_by(interval) %>%
+     summarise(interval_mean_steps = mean(steps, na.rm = TRUE))
+
+interval_means %>%
+     ggvis(~interval, ~interval_mean_steps) %>%
+     layer_lines(stroke := "blue") %>%
+     add_axis("x", title = "24-hour Time (5-Minute Intervals)", format = "d") %>%
+     add_axis("y", title = "Mean Steps per Interval")
+
+# 5-minute interval with maximum number of steps on average
+max_steps_interval <- activity_data$interval_seq[which.max(interval_means$interval_mean_steps)]
+
+```
+
+
+The 5-minute interval with the maximum number of steps on average: **``r as.character(max_steps_interval)``**     
+
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
 
 ## Imputing missing values
 
+Given that there are missing values (recorded as NAs) in the dataset, this may introduce bias into some calculations or summaries of the data.  
 
+* The total number of missing values (NAs) in the dataset: **``r sum(is.na(activity_data))``**
+
+* All missing values are recorded only in the **steps** variable.
+
+```{r, echo=TRUE, result=FALSE}
+
+var_NAs <- sapply(activity_data, function(y) sum(length(which(is.na(y)))))
+
+print(var_NAs)
+
+```
+
+
+We will use the mean value for the relevant 5-minute interval to fill in the corresponding missing values.  
+
+```{r, echo=TRUE}
+ 
+# we replace NAs by interval mean value for the particular interval time slot
+# add the interval_mean_steps to activity_data: round the value, and convert to integer
+activity_data$interval_mean_steps <- as.integer(round(interval_means$interval_mean_steps))
+
+# add variable, updated_steps
+# if steps == NA, replace with relevant interval_mean_steps for the interval: 
+activity_data <- activity_data %>% 
+     mutate(imp_steps = ifelse(is.na(steps), interval_mean_steps, steps))
+
+```
+
+
+We create a new dataset equal to the original dataset with the NAs replaced by interval means.
+
+```{r, echo=TRUE}
+
+imp_activity_data <- activity_data %>% select(imp_steps, date_times, interval)
+
+```
+
+
+With the updated dataset, the histogram now looks like below:  
+
+```{r, echo=TRUE}
+
+# update calculations with imputed values
+imp_daily_totals <- imp_activity_data %>%
+     group_by(d = cut.POSIXt(date_times, breaks = "days")) %>%
+     summarise(imp_daily_sum = sum(imp_steps, na.rm = TRUE))
+
+# updated daily mean and daily median
+imp_daily_mean <- round(mean(imp_daily_totals$imp_daily_sum, na.rm = TRUE))
+imp_daily_median <- median(imp_daily_totals$imp_daily_sum, na.rm = TRUE)
+
+# updated histogram of total number of steps taken daily
+imp_daily_totals %>%
+     ggvis(~imp_daily_sum) %>%
+     layer_histograms(width=2000, fill := "blue") %>%
+     add_axis("x", title = "Number of Steps (with imputed values)") %>%
+     add_axis("y", title = "Frequency(with imputed values)")
+
+```
+
+The mean of the total number of steps taken per day: **``r as.integer(round(imp_daily_mean))``**
+
+The median of the total number of steps taken per day: **``r imp_daily_median``**
+
+
+We may note that:  
+
+* the distribution for the updated histogram looks a little more like a normal distribution  
+
+* the difference between the mean and median for the updated dataset is minimal 
+
+An interesting question here would be: how do we validate the choice of the interval mean as a fill for missing values?
+
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
 
 ## Are there differences in activity patterns between weekdays and weekends?
+
+It would seem that this is the case.  From the panel plot below, we can see a difference in the activity for the weekdays against the weekends.  On average, it looks like there is a spike in activity all week long around the 08:00 to 10:00 intervals.  However, on average, weekends appear to show more activity during the normal daytime hours.   
+
+For processing the weekday vs weekend, we use the `is.weekend` function from the `chron` library   
+
+For the panel plot, we use the [`lattice`](http://www.rdocumentation.org/packages/lattice/functions/Lattice) library  
+
+We will add a new factor variable, **week_days** to the updated dataset with two levels: “weekday” and “weekend,” which will indicate whether a given date is a weekday or weekend day.
+
+```{r, echo=TRUE}
+# load libraries
+library(lattice)
+
+# add new variables, 'week_days' and 'imp_interval_mean', to dataset
+imp_activity_data <- imp_activity_data %>%
+     mutate(week_days = ifelse(is.weekend(date_times), "weekend", "weekday"))
+
+imp_activity_data$week_days <- factor(imp_activity_data$week_days)
+
+imp_mean_steps_per_int <- imp_activity_data %>%
+     group_by(interval, week_days) %>%
+     summarise(imp_interval_mean = mean(imp_steps, na.rm = TRUE))
+
+# generate panel plot
+xyplot((imp_interval_mean ~ interval | week_days), 
+       data = imp_mean_steps_per_int,
+       type = "l",
+       xlab = "Interval",
+       ylab = "Number of steps",
+       layout=c(1,2))
+
+```
+
+__________________________________________________________________________________________________________________
+
+----------------------------------------------------------------------------------
