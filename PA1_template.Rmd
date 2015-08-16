@@ -11,7 +11,7 @@ output:
 
 ### Loading
 
-Download the dataset here: [Activity monitoring data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip)  
+The dataset is here: [Activity monitoring data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip)  
 
 The dataset is an csv-formatted file, with data collected over the period Oct 01 thru Nov 31 2012, at 5-min intervals throughout each day.  
 
